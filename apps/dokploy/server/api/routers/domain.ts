@@ -4,6 +4,7 @@ import {
 	findDomainById,
 	findDomainsByApplicationId,
 	findDomainsByComposeId,
+	findComposePreviewDeploymentById,
 	findPreviewDeploymentById,
 	findServerById,
 	generateTraefikMeDomain,
@@ -42,6 +43,20 @@ export const domainRouter = createTRPCRouter({
 					});
 				} else if (input.domainType === "application" && input.applicationId) {
 					await checkServicePermissionAndAccess(ctx, input.applicationId, {
+						domain: ["create"],
+					});
+				} else if (input.previewDeploymentId) {
+					const preview = await findPreviewDeploymentById(
+						input.previewDeploymentId,
+					);
+					await checkServicePermissionAndAccess(ctx, preview.applicationId, {
+						domain: ["create"],
+					});
+				} else if (input.composePreviewDeploymentId) {
+					const preview = await findComposePreviewDeploymentById(
+						input.composePreviewDeploymentId,
+					);
+					await checkServicePermissionAndAccess(ctx, preview.composeId, {
 						domain: ["create"],
 					});
 				}

@@ -51,6 +51,7 @@ function getJobLabel(row: QueueRow): string {
 		applicationId?: string;
 		composeId?: string;
 		previewDeploymentId?: string;
+		composePreviewDeploymentId?: string;
 		titleLog?: string;
 		type?: string;
 	};
@@ -62,6 +63,8 @@ function getJobLabel(row: QueueRow): string {
 	if (d.composeId) return `Compose ${d.composeId.slice(0, 8)}…`;
 	if (d.previewDeploymentId)
 		return `Preview ${d.previewDeploymentId.slice(0, 8)}…`;
+	if (d.composePreviewDeploymentId)
+		return `Compose preview ${d.composePreviewDeploymentId.slice(0, 8)}…`;
 	return `${type} ${String(row.id)}`;
 }
 

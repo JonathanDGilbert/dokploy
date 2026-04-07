@@ -1,11 +1,15 @@
 import {
 	checkUserRepositoryPermissions,
+	createComposePreviewDeployment,
 	createPreviewDeployment,
 	createSecurityBlockedComment,
 	findGithubById,
+	findComposePreviewDeploymentByComposeAndPullRequest,
+	findComposePreviewDeploymentsByPullRequestId,
 	findPreviewDeploymentByApplicationId,
 	findPreviewDeploymentsByPullRequestId,
 	IS_CLOUD,
+	removeComposePreviewDeployment,
 	removePreviewDeployment,
 	shouldDeploy,
 } from "@dokploy/server";
@@ -330,13 +334,28 @@ export default async function handler(
 
 		if (action === "closed") {
 			const previewDeploymentResult =
-				await findPreviewDeploymentsByPullRequestId(prId);
+				await findPreviewDeploymentsByPullRequestId(String(prId));
 
 			if (previewDeploymentResult.length > 0) {
 				for (const previewDeployment of previewDeploymentResult) {
 					try {
 						await removePreviewDeployment(
 							previewDeployment.previewDeploymentId,
+						);
+					} catch (error) {
+						console.log(error);
+					}
+				}
+			}
+
+			const composePreviewResult =
+				await findComposePreviewDeploymentsByPullRequestId(String(prId));
+
+			if (composePreviewResult.length > 0) {
+				for (const composePreview of composePreviewResult) {
+					try {
+						await removeComposePreviewDeployment(
+							composePreview.composePreviewDeploymentId,
 						);
 					} catch (error) {
 						console.log(error);
@@ -395,6 +414,7 @@ export default async function handler(
 			// SECURITY: Check collaborator permissions per application setting
 			const secureApps: typeof apps = [];
 			const blockedApps: string[] = [];
+			const blockedCompose: string[] = [];
 			let userPermission: string | null = null;
 
 			for (const app of apps) {
@@ -439,14 +459,71 @@ export default async function handler(
 				secureApps.push(app);
 			}
 
+			const composeRows = await db.query.compose.findMany({
+				where: and(
+					eq(compose.sourceType, "github"),
+					eq(compose.repository, repository),
+					eq(compose.branch, branch),
+					eq(compose.isPreviewDeploymentsActive, true),
+					eq(compose.owner, owner),
+					eq(compose.githubId, githubResult.githubId),
+				),
+				with: {
+					composePreviewDeployments: true,
+				},
+			});
+
+			const secureCompose: typeof composeRows = [];
+
+			for (const comp of composeRows) {
+				if (comp.previewRequireCollaboratorPermissions !== false) {
+					try {
+						const githubProvider = await findGithubById(githubResult.githubId);
+						const { hasWriteAccess, permission } =
+							await checkUserRepositoryPermissions(
+								githubProvider,
+								owner,
+								repository,
+								prAuthor,
+							);
+
+						userPermission = permission;
+
+						if (!hasWriteAccess) {
+							console.warn(
+								`🚨 SECURITY: Blocked compose preview for ${comp.name} from unauthorized user ${prAuthor} on ${owner}/${repository}. Permission: ${permission || "none"}`,
+							);
+							blockedCompose.push(comp.name);
+							continue;
+						}
+
+						console.log(
+							`✅ SECURITY: Compose preview authorized for ${comp.name} from user ${prAuthor} on ${owner}/${repository}. Permission: ${permission}`,
+						);
+					} catch (error) {
+						console.error(
+							`Error validating PR author permissions for compose ${comp.name}:`,
+							error,
+						);
+						blockedCompose.push(comp.name);
+						continue;
+					}
+				} else {
+					console.warn(
+						`⚠️  SECURITY: Compose preview for ${comp.name} allows deployment from any PR author (security check disabled)`,
+					);
+				}
+				secureCompose.push(comp);
+			}
+
 			const prBranch = githubBody?.pull_request?.head?.ref;
 
 			const prNumber = githubBody?.pull_request?.number;
 			const prTitle = githubBody?.pull_request?.title;
 			const prURL = githubBody?.pull_request?.html_url;
 
-			// Create security notification comment if any apps were blocked
-			if (blockedApps.length > 0) {
+			// Create security notification comment if any apps or compose services were blocked
+			if (blockedApps.length > 0 || blockedCompose.length > 0) {
 				await createSecurityBlockedComment({
 					owner,
 					repository,
@@ -476,7 +553,10 @@ export default async function handler(
 					continue;
 				}
 				const previewDeploymentResult =
-					await findPreviewDeploymentByApplicationId(app.applicationId, prId);
+					await findPreviewDeploymentByApplicationId(
+						app.applicationId,
+						String(prId),
+					);
 
 				let previewDeploymentId =
 					previewDeploymentResult?.previewDeploymentId || "";
@@ -485,8 +565,8 @@ export default async function handler(
 					const previewDeployment = await createPreviewDeployment({
 						applicationId: app.applicationId as string,
 						branch: prBranch,
-						pullRequestId: prId,
-						pullRequestNumber: prNumber,
+						pullRequestId: String(prId),
+						pullRequestNumber: String(prNumber),
 						pullRequestTitle: prTitle,
 						pullRequestURL: prURL,
 					});
@@ -514,6 +594,74 @@ export default async function handler(
 					await myQueue.add(
 						"deployments",
 						{ ...jobData },
+						{
+							removeOnComplete: true,
+							removeOnFail: true,
+						},
+					);
+				}
+			}
+
+			for (const comp of secureCompose) {
+				if (comp?.previewLabels && comp?.previewLabels?.length > 0) {
+					let hasLabel = false;
+					const labels = githubBody?.pull_request?.labels;
+					for (const label of labels) {
+						if (comp?.previewLabels?.includes(label.name)) {
+							hasLabel = true;
+							break;
+						}
+					}
+					if (!hasLabel) continue;
+				}
+
+				const previewLimit = comp?.previewLimit || 0;
+				if (comp?.composePreviewDeployments?.length > previewLimit) {
+					continue;
+				}
+
+				const existingPreview =
+					await findComposePreviewDeploymentByComposeAndPullRequest(
+						comp.composeId,
+						String(prId),
+					);
+
+				let composePreviewDeploymentId =
+					existingPreview?.composePreviewDeploymentId || "";
+
+				if (!existingPreview && shouldCreateDeployment) {
+					const created = await createComposePreviewDeployment({
+						composeId: comp.composeId,
+						branch: prBranch,
+						pullRequestId: String(prId),
+						pullRequestNumber: String(prNumber),
+						pullRequestTitle: prTitle,
+						pullRequestURL: prURL,
+					});
+					composePreviewDeploymentId = created.composePreviewDeploymentId;
+				}
+
+				const composeJobData: DeploymentJob = {
+					composeId: comp.composeId,
+					titleLog: "Compose Preview Deployment",
+					descriptionLog: `Hash: ${deploymentHash}`,
+					type: "deploy",
+					applicationType: "compose-preview",
+					server: !!comp.serverId,
+					composePreviewDeploymentId,
+				};
+
+				if (composePreviewDeploymentId) {
+					if (IS_CLOUD && comp.serverId) {
+						composeJobData.serverId = comp.serverId;
+						deploy(composeJobData).catch((error) => {
+							console.error("Background deployment failed:", error);
+						});
+						continue;
+					}
+					await myQueue.add(
+						"deployments",
+						{ ...composeJobData },
 						{
 							removeOnComplete: true,
 							removeOnFail: true,

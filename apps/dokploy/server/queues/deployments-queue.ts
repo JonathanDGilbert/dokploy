@@ -2,12 +2,15 @@ import {
 	deployApplication,
 	deployCompose,
 	deployPreviewApplication,
+	deployPreviewCompose,
 	IS_CLOUD,
 	rebuildApplication,
 	rebuildCompose,
 	rebuildPreviewApplication,
+	rebuildPreviewCompose,
 	updateApplicationStatus,
 	updateCompose,
+	updateComposePreviewDeployment,
 	updatePreviewDeployment,
 } from "@dokploy/server";
 import { type Job, Worker } from "bullmq";
@@ -70,6 +73,29 @@ const createDeploymentWorker = () =>
 							titleLog: job.data.titleLog,
 							descriptionLog: job.data.descriptionLog,
 							previewDeploymentId: job.data.previewDeploymentId,
+						});
+					}
+				} else if (job.data.applicationType === "compose-preview") {
+					await updateComposePreviewDeployment(
+						job.data.composePreviewDeploymentId,
+						{
+							previewStatus: "running",
+						},
+					);
+
+					if (job.data.type === "redeploy") {
+						await rebuildPreviewCompose({
+							composeId: job.data.composeId,
+							titleLog: job.data.titleLog,
+							descriptionLog: job.data.descriptionLog,
+							composePreviewDeploymentId: job.data.composePreviewDeploymentId,
+						});
+					} else if (job.data.type === "deploy") {
+						await deployPreviewCompose({
+							composeId: job.data.composeId,
+							titleLog: job.data.titleLog,
+							descriptionLog: job.data.descriptionLog,
+							composePreviewDeploymentId: job.data.composePreviewDeploymentId,
 						});
 					}
 				}

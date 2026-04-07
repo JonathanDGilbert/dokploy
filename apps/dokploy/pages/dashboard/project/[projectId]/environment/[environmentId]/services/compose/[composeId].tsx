@@ -26,6 +26,7 @@ import { DeleteService } from "@/components/dashboard/compose/delete-service";
 import { ShowGeneralCompose } from "@/components/dashboard/compose/general/show";
 import { ShowDockerLogsCompose } from "@/components/dashboard/compose/logs/show";
 import { ShowDockerLogsStack } from "@/components/dashboard/compose/logs/show-stack";
+import { ShowComposePreviewDeployments } from "@/components/dashboard/compose/preview-deployments/show-compose-preview-deployments";
 import { UpdateCompose } from "@/components/dashboard/compose/update-compose";
 import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
 import { ComposeFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-compose-monitoring";
@@ -59,6 +60,7 @@ type TabState =
 	| "settings"
 	| "advanced"
 	| "deployments"
+	| "preview-deployments"
 	| "domains"
 	| "monitoring"
 	| "volumeBackups";
@@ -231,6 +233,12 @@ const Service = (
 													Deployments
 												</TabsTrigger>
 											)}
+											{permissions?.deployment.read &&
+												data?.sourceType === "github" && (
+													<TabsTrigger value="preview-deployments">
+														Preview Deployments
+													</TabsTrigger>
+												)}
 											{permissions?.service.create && (
 												<TabsTrigger value="backups">Backups</TabsTrigger>
 											)}
@@ -384,6 +392,16 @@ const Service = (
 											</div>
 										</TabsContent>
 									)}
+
+									{permissions?.deployment.read &&
+										data?.sourceType === "github" && (
+											<TabsContent
+												value="preview-deployments"
+												className="w-full pt-2.5"
+											>
+												<ShowComposePreviewDeployments composeId={composeId} />
+											</TabsContent>
+										)}
 
 									{permissions?.domain.read && (
 										<TabsContent value="domains">

@@ -26,6 +26,16 @@ type DeployJob =
 			applicationType: "application-preview";
 			previewDeploymentId: string;
 			serverId?: string;
+	  }
+	| {
+			composeId: string;
+			titleLog: string;
+			descriptionLog: string;
+			server?: boolean;
+			type: "deploy" | "redeploy";
+			applicationType: "compose-preview";
+			composePreviewDeploymentId: string;
+			serverId?: string;
 	  };
 
 export type DeploymentJob = DeployJob;

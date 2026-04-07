@@ -6,12 +6,14 @@ import {
 	type apiCreateDeployment,
 	type apiCreateDeploymentBackup,
 	type apiCreateDeploymentCompose,
+	type apiCreateDeploymentComposePreview,
 	type apiCreateDeploymentPreview,
 	type apiCreateDeploymentSchedule,
 	type apiCreateDeploymentServer,
 	type apiCreateDeploymentVolumeBackup,
 	applications,
 	compose,
+	composePreviewDeployments,
 	deployments,
 	environments,
 	projects,
@@ -350,6 +352,118 @@ echo "Initializing deployment\n" >> ${logFilePath};
 	}
 };
 
+export const createDeploymentComposePreview = async (
+	deployment: Omit<
+		z.infer<typeof apiCreateDeploymentComposePreview>,
+		"deploymentId" | "createdAt" | "status" | "logPath"
+	>,
+) => {
+	const composePreviewDeployment = await db.query.composePreviewDeployments.findFirst(
+		{
+			where: eq(
+				composePreviewDeployments.composePreviewDeploymentId,
+				deployment.composePreviewDeploymentId,
+			),
+			with: {
+				compose: {
+					with: {
+						server: true,
+						environment: { with: { project: true } },
+					},
+				},
+			},
+		},
+	);
+	if (!composePreviewDeployment?.compose) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Compose preview deployment not found",
+		});
+	}
+	const composeEntity = composePreviewDeployment.compose;
+	await removeLastTenDeployments(
+		deployment.composePreviewDeploymentId,
+		"composePreviewDeployment",
+		composeEntity.serverId,
+	);
+	try {
+		const appName = composePreviewDeployment.appName;
+		const { LOGS_PATH } = paths(!!composeEntity.serverId);
+		const formattedDateTime = format(new Date(), "yyyy-MM-dd:HH:mm:ss");
+		const fileName = `${appName}-${formattedDateTime}.log`;
+		const logFilePath = path.join(LOGS_PATH, appName, fileName);
+
+		if (composeEntity.serverId) {
+			const server = await findServerById(composeEntity.serverId);
+
+			const command = `
+				mkdir -p ${LOGS_PATH}/${appName};
+            	echo "Initializing deployment" >> ${logFilePath};
+			`;
+
+			await execAsyncRemote(server.serverId, command);
+		} else {
+			await fsPromises.mkdir(path.join(LOGS_PATH, appName), {
+				recursive: true,
+			});
+			await fsPromises.writeFile(logFilePath, "Initializing deployment");
+		}
+
+		const deploymentCreate = await db
+			.insert(deployments)
+			.values({
+				title: deployment.title || "Deployment",
+				status: "running",
+				logPath: logFilePath,
+				description: deployment.description || "",
+				composeId: deployment.composeId,
+				composePreviewDeploymentId: deployment.composePreviewDeploymentId,
+				isPreviewDeployment: true,
+				startedAt: new Date().toISOString(),
+			})
+			.returning();
+		if (deploymentCreate.length === 0 || !deploymentCreate[0]) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Error creating the deployment",
+			});
+		}
+		return deploymentCreate[0];
+	} catch (error) {
+		await db
+			.insert(deployments)
+			.values({
+				composeId: deployment.composeId,
+				composePreviewDeploymentId: deployment.composePreviewDeploymentId,
+				title: deployment.title || "Deployment",
+				status: "error",
+				logPath: "",
+				description: deployment.description || "",
+				errorMessage: `An error have occurred: ${error instanceof Error ? error.message : error}`,
+				startedAt: new Date().toISOString(),
+				finishedAt: new Date().toISOString(),
+				isPreviewDeployment: true,
+			})
+			.returning();
+		await db
+			.update(composePreviewDeployments)
+			.set({
+				previewStatus: "error",
+			})
+			.where(
+				eq(
+					composePreviewDeployments.composePreviewDeploymentId,
+					deployment.composePreviewDeploymentId,
+				),
+			);
+		console.log(error);
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Error creating the deployment",
+		});
+	}
+};
+
 export const createDeploymentBackup = async (
 	deployment: Omit<
 		z.infer<typeof apiCreateDeploymentBackup>,
@@ -641,6 +755,7 @@ const getDeploymentsByType = async (
 		| "server"
 		| "schedule"
 		| "previewDeployment"
+		| "composePreviewDeployment"
 		| "backup"
 		| "volumeBackup",
 ) => {
@@ -674,6 +789,7 @@ const removeLastTenDeployments = async (
 		| "server"
 		| "schedule"
 		| "previewDeployment"
+		| "composePreviewDeployment"
 		| "backup"
 		| "volumeBackup",
 	serverId?: string | null,
@@ -751,6 +867,33 @@ export const removeDeploymentsByPreviewDeploymentId = async (
 			eq(
 				deployments.previewDeploymentId,
 				previewDeployment.previewDeploymentId,
+			),
+		)
+		.returning();
+};
+
+export type ComposePreviewDeploymentRow =
+	typeof composePreviewDeployments.$inferSelect;
+
+export const removeDeploymentsByComposePreviewDeploymentId = async (
+	composePreviewDeployment: ComposePreviewDeploymentRow,
+	serverId: string | null,
+) => {
+	const { appName } = composePreviewDeployment;
+	const { LOGS_PATH } = paths(!!serverId);
+	const logsPath = path.join(LOGS_PATH, appName);
+	if (serverId) {
+		await execAsyncRemote(serverId, `rm -rf ${logsPath}`);
+	} else {
+		await removeDirectoryIfExistsContent(logsPath);
+	}
+
+	await db
+		.delete(deployments)
+		.where(
+			eq(
+				deployments.composePreviewDeploymentId,
+				composePreviewDeployment.composePreviewDeploymentId,
 			),
 		)
 		.returning();

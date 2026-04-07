@@ -14,6 +14,7 @@ import { z } from "zod";
 import { domain } from "../validations/domain";
 import { applications } from "./application";
 import { compose } from "./compose";
+import { composePreviewDeployments } from "./compose-preview-deployments";
 import { previewDeployments } from "./preview-deployments";
 import { certificateType } from "./shared";
 
@@ -51,6 +52,10 @@ export const domains = pgTable("domain", {
 		(): AnyPgColumn => previewDeployments.previewDeploymentId,
 		{ onDelete: "cascade" },
 	),
+	composePreviewDeploymentId: text("composePreviewDeploymentId").references(
+		(): AnyPgColumn => composePreviewDeployments.composePreviewDeploymentId,
+		{ onDelete: "cascade" },
+	),
 	certificateType: certificateType("certificateType").notNull().default("none"),
 	internalPath: text("internalPath").default("/"),
 	stripPath: boolean("stripPath").notNull().default(false),
@@ -69,6 +74,10 @@ export const domainsRelations = relations(domains, ({ one }) => ({
 	previewDeployment: one(previewDeployments, {
 		fields: [domains.previewDeploymentId],
 		references: [previewDeployments.previewDeploymentId],
+	}),
+	composePreviewDeployment: one(composePreviewDeployments, {
+		fields: [domains.composePreviewDeploymentId],
+		references: [composePreviewDeployments.composePreviewDeploymentId],
 	}),
 }));
 
@@ -91,6 +100,7 @@ export const apiCreateDomain = createSchema.pick({
 	serviceName: true,
 	domainType: true,
 	previewDeploymentId: true,
+	composePreviewDeploymentId: true,
 	internalPath: true,
 	stripPath: true,
 	middlewares: true,

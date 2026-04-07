@@ -14,6 +14,7 @@ interface Props {
 		| "server"
 		| "backup"
 		| "previewDeployment"
+		| "composePreviewDeployment"
 		| "volumeBackup";
 	serverId?: string;
 	refreshToken?: string;

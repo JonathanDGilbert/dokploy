@@ -11,11 +11,12 @@ import { environments } from "./environment";
 import { gitea } from "./gitea";
 import { github } from "./github";
 import { gitlab } from "./gitlab";
+import { composePreviewDeployments } from "./compose-preview-deployments";
 import { mounts } from "./mount";
 import { patch } from "./patch";
 import { schedules } from "./schedule";
 import { server } from "./server";
-import { applicationStatus, triggerType } from "./shared";
+import { applicationStatus, certificateType, triggerType } from "./shared";
 import { sshKeys } from "./ssh-key";
 import { APP_NAME_MESSAGE, APP_NAME_REGEX, generateAppName } from "./utils";
 export const sourceTypeCompose = pgEnum("sourceTypeCompose", [
@@ -84,6 +85,24 @@ export const compose = pgTable("compose", {
 	isolatedDeploymentsVolume: boolean("isolatedDeploymentsVolume")
 		.notNull()
 		.default(false),
+	previewEnv: text("previewEnv"),
+	previewLabels: text("previewLabels").array(),
+	previewWildcard: text("previewWildcard"),
+	previewPort: integer("previewPort").default(3000),
+	previewHttps: boolean("previewHttps").notNull().default(false),
+	previewPath: text("previewPath").default("/"),
+	previewCertificateType: certificateType("previewCertificateType")
+		.notNull()
+		.default("none"),
+	previewCustomCertResolver: text("previewCustomCertResolver"),
+	previewLimit: integer("previewLimit").default(3),
+	isPreviewDeploymentsActive: boolean("isPreviewDeploymentsActive").default(
+		false,
+	),
+	previewRequireCollaboratorPermissions: boolean(
+		"previewRequireCollaboratorPermissions",
+	).default(true),
+	previewServiceName: text("previewServiceName").default("gateway"),
 	triggerType: triggerType("triggerType").default("push"),
 	composeStatus: applicationStatus("composeStatus").notNull().default("idle"),
 	environmentId: text("environmentId")
@@ -145,6 +164,7 @@ export const composeRelations = relations(compose, ({ one, many }) => ({
 	backups: many(backups),
 	schedules: many(schedules),
 	patches: many(patch),
+	composePreviewDeployments: many(composePreviewDeployments),
 }));
 
 const createSchema = createInsertSchema(compose, {
@@ -169,6 +189,18 @@ const createSchema = createInsertSchema(compose, {
 		.optional(),
 	triggerType: z.enum(["push", "tag"]).optional(),
 	composeStatus: z.enum(["idle", "running", "done", "error"]).optional(),
+	previewCertificateType: z.enum(["letsencrypt", "none", "custom"]).optional(),
+	previewLabels: z.array(z.string()).optional(),
+	previewLimit: z.number().optional(),
+	previewPort: z.number().optional(),
+	previewHttps: z.boolean().optional(),
+	previewPath: z.string().optional(),
+	previewWildcard: z.string().optional(),
+	previewEnv: z.string().optional(),
+	isPreviewDeploymentsActive: z.boolean().optional(),
+	previewRequireCollaboratorPermissions: z.boolean().optional(),
+	previewServiceName: z.string().optional(),
+	previewCustomCertResolver: z.string().optional(),
 });
 
 export const apiCreateCompose = createSchema.pick({

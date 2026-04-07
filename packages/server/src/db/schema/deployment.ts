@@ -12,6 +12,7 @@ import { z } from "zod";
 import { applications } from "./application";
 import { backups } from "./backups";
 import { compose } from "./compose";
+import { composePreviewDeployments } from "./compose-preview-deployments";
 import { previewDeployments } from "./preview-deployments";
 import { rollbacks } from "./rollbacks";
 import { schedules } from "./schedule";
@@ -47,6 +48,10 @@ export const deployments = pgTable("deployment", {
 	isPreviewDeployment: boolean("isPreviewDeployment").default(false),
 	previewDeploymentId: text("previewDeploymentId").references(
 		(): AnyPgColumn => previewDeployments.previewDeploymentId,
+		{ onDelete: "cascade" },
+	),
+	composePreviewDeploymentId: text("composePreviewDeploymentId").references(
+		(): AnyPgColumn => composePreviewDeployments.composePreviewDeploymentId,
 		{ onDelete: "cascade" },
 	),
 	createdAt: text("createdAt")
@@ -98,6 +103,10 @@ export const deploymentsRelations = relations(deployments, ({ one }) => ({
 		fields: [deployments.previewDeploymentId],
 		references: [previewDeployments.previewDeploymentId],
 	}),
+	composePreviewDeployment: one(composePreviewDeployments, {
+		fields: [deployments.composePreviewDeploymentId],
+		references: [composePreviewDeployments.composePreviewDeploymentId],
+	}),
 	schedule: one(schedules, {
 		fields: [deployments.scheduleId],
 		references: [schedules.scheduleId],
@@ -124,6 +133,7 @@ const schema = createInsertSchema(deployments, {
 	composeId: z.string(),
 	description: z.string().optional(),
 	previewDeploymentId: z.string(),
+	composePreviewDeploymentId: z.string(),
 	buildServerId: z.string(),
 });
 export const apiCreateDeployment = schema
@@ -161,6 +171,20 @@ export const apiCreateDeploymentCompose = schema
 	})
 	.extend({
 		composeId: z.string().min(1),
+	});
+
+export const apiCreateDeploymentComposePreview = schema
+	.pick({
+		title: true,
+		status: true,
+		logPath: true,
+		description: true,
+		composeId: true,
+		composePreviewDeploymentId: true,
+	})
+	.extend({
+		composeId: z.string().min(1),
+		composePreviewDeploymentId: z.string().min(1),
 	});
 
 export const apiCreateDeploymentBackup = schema
@@ -229,6 +253,7 @@ export const apiFindAllByType = z.object({
 		"server",
 		"schedule",
 		"previewDeployment",
+		"composePreviewDeployment",
 		"backup",
 		"volumeBackup",
 	]),

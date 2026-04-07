@@ -6,8 +6,10 @@ import {
 	buildAppName,
 	cleanAppName,
 	compose,
+	deployments,
 } from "@dokploy/server/db/schema";
 import { getBuildComposeCommand } from "@dokploy/server/utils/builders/compose";
+import type { ComposeNested } from "@dokploy/server/utils/builders/compose";
 import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
 import {
 	cloneCompose,
@@ -32,15 +34,27 @@ import { cloneGithubRepository } from "@dokploy/server/utils/providers/github";
 import { cloneGitlabRepository } from "@dokploy/server/utils/providers/gitlab";
 import { getCreateComposeFileCommand } from "@dokploy/server/utils/providers/raw";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { z } from "zod";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
 import {
 	createDeploymentCompose,
+	createDeploymentComposePreview,
 	updateDeployment,
 	updateDeploymentStatus,
 } from "./deployment";
+import { type Domain, getDomainHost } from "./domain";
+import {
+	getIssueComment,
+	issueCommentExists,
+	updateIssueComment,
+} from "./github";
+import {
+	createComposePreviewDeploymentComment,
+	findComposePreviewDeploymentById,
+	updateComposePreviewDeployment,
+} from "./compose-preview-deployment";
 import { generateApplyPatchesCommand } from "./patch";
 import { validUniqueServerAppName } from "./project";
 
@@ -133,6 +147,14 @@ export const findComposeById = async (composeId: string) => {
 				with: {
 					destination: true,
 					deployments: true,
+				},
+			},
+			composePreviewDeployments: {
+				with: {
+					domain: true,
+					deployments: {
+						orderBy: desc(deployments.createdAt),
+					},
 				},
 			},
 		},
@@ -412,6 +434,314 @@ export const rebuildCompose = async ({
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updateCompose(composeId, {
 			composeStatus: "error",
+		});
+		throw error;
+	}
+
+	return true;
+};
+
+export const deployPreviewCompose = async ({
+	composeId,
+	titleLog = "Compose preview deployment",
+	descriptionLog = "",
+	composePreviewDeploymentId,
+}: {
+	composeId: string;
+	titleLog: string;
+	descriptionLog: string;
+	composePreviewDeploymentId: string;
+}) => {
+	const compose = await findComposeById(composeId);
+
+	const deployment = await createDeploymentComposePreview({
+		title: titleLog,
+		description: descriptionLog,
+		composeId,
+		composePreviewDeploymentId,
+	});
+
+	const previewDeployment =
+		await findComposePreviewDeploymentById(composePreviewDeploymentId);
+
+	await updateComposePreviewDeployment(composePreviewDeploymentId, {
+		createdAt: new Date().toISOString(),
+	});
+
+	if (!previewDeployment.domain) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Compose preview domain not found",
+		});
+	}
+
+	const previewDomain = getDomainHost(previewDeployment.domain as Domain);
+	const issueParams = {
+		owner: compose.owner || "",
+		repository: compose.repository || "",
+		issue_number: previewDeployment.pullRequestNumber,
+		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId),
+		githubId: compose.githubId || "",
+	};
+
+	try {
+		const commentExists = await issueCommentExists({
+			...issueParams,
+		});
+		if (!commentExists) {
+			const result = await createComposePreviewDeploymentComment({
+				owner: issueParams.owner,
+				repository: issueParams.repository,
+				issue_number: issueParams.issue_number,
+				previewDomain,
+				appName: previewDeployment.appName,
+				githubId: issueParams.githubId,
+				composePreviewDeploymentId,
+			});
+
+			if (!result) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Pull request comment not found",
+				});
+			}
+
+			issueParams.comment_id = Number.parseInt(result.pullRequestCommentId);
+		}
+		const buildingComment = getIssueComment(
+			compose.name,
+			"running",
+			previewDomain,
+		);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${buildingComment}`,
+		});
+
+		const effectiveCompose = {
+			...compose,
+			appName: previewDeployment.appName,
+			branch: previewDeployment.branch,
+			env: `${compose.env ?? ""}\n${compose.previewEnv ?? ""}\nDOKPLOY_DEPLOY_URL=${previewDeployment.domain.host}`,
+			domains: [previewDeployment.domain],
+		} as ComposeNested;
+
+		let command = "set -e;";
+		if (compose.sourceType === "github") {
+			command += await cloneGithubRepository({
+				...effectiveCompose,
+				type: "compose",
+			});
+		} else {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Compose preview deployments require a GitHub-backed compose service",
+			});
+		}
+
+		let commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		command = "set -e;";
+		command += await generateApplyPatchesCommand({
+			id: compose.composeId,
+			type: "compose",
+			serverId: compose.serverId,
+		});
+		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		command = "set -e;";
+		command += await getBuildComposeCommand(effectiveCompose);
+		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		const successComment = getIssueComment(
+			compose.name,
+			"success",
+			previewDomain,
+		);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${successComment}`,
+		});
+		await updateDeploymentStatus(deployment.deploymentId, "done");
+		await updateComposePreviewDeployment(composePreviewDeploymentId, {
+			previewStatus: "done",
+		});
+	} catch (error) {
+		const comment = getIssueComment(compose.name, "error", previewDomain);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${comment}`,
+		});
+		await updateDeploymentStatus(deployment.deploymentId, "error");
+		await updateComposePreviewDeployment(composePreviewDeploymentId, {
+			previewStatus: "error",
+		});
+		throw error;
+	}
+
+	return true;
+};
+
+export const rebuildPreviewCompose = async ({
+	composeId,
+	titleLog = "Rebuild compose preview deployment",
+	descriptionLog = "",
+	composePreviewDeploymentId,
+}: {
+	composeId: string;
+	titleLog: string;
+	descriptionLog: string;
+	composePreviewDeploymentId: string;
+}) => {
+	const compose = await findComposeById(composeId);
+	const previewDeployment =
+		await findComposePreviewDeploymentById(composePreviewDeploymentId);
+
+	const deployment = await createDeploymentComposePreview({
+		title: titleLog,
+		description: descriptionLog,
+		composeId,
+		composePreviewDeploymentId,
+	});
+
+	if (!previewDeployment.domain) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Compose preview domain not found",
+		});
+	}
+
+	const previewDomain = getDomainHost(previewDeployment.domain as Domain);
+	const issueParams = {
+		owner: compose.owner || "",
+		repository: compose.repository || "",
+		issue_number: previewDeployment.pullRequestNumber,
+		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId),
+		githubId: compose.githubId || "",
+	};
+
+	try {
+		const commentExists = await issueCommentExists({
+			...issueParams,
+		});
+		if (!commentExists) {
+			const result = await createComposePreviewDeploymentComment({
+				owner: issueParams.owner,
+				repository: issueParams.repository,
+				issue_number: issueParams.issue_number,
+				previewDomain,
+				appName: previewDeployment.appName,
+				githubId: issueParams.githubId,
+				composePreviewDeploymentId,
+			});
+
+			if (!result) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Pull request comment not found",
+				});
+			}
+
+			issueParams.comment_id = Number.parseInt(result.pullRequestCommentId);
+		}
+
+		const buildingComment = getIssueComment(
+			compose.name,
+			"running",
+			previewDomain,
+		);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${buildingComment}`,
+		});
+
+		const effectiveCompose = {
+			...compose,
+			appName: previewDeployment.appName,
+			branch: previewDeployment.branch,
+			env: `${compose.env ?? ""}\n${compose.previewEnv ?? ""}\nDOKPLOY_DEPLOY_URL=${previewDeployment.domain.host}`,
+			domains: [previewDeployment.domain],
+		} as ComposeNested;
+
+		let command = "set -e;";
+		if (compose.sourceType === "github") {
+			command += await cloneGithubRepository({
+				...effectiveCompose,
+				type: "compose",
+			});
+		} else {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Compose preview deployments require a GitHub-backed compose service",
+			});
+		}
+
+		let commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		command = "set -e;";
+		command += await generateApplyPatchesCommand({
+			id: compose.composeId,
+			type: "compose",
+			serverId: compose.serverId,
+		});
+		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		command = "set -e;";
+		command += await getBuildComposeCommand(effectiveCompose);
+		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, commandWithLog);
+		} else {
+			await execAsync(commandWithLog);
+		}
+
+		const successComment = getIssueComment(
+			compose.name,
+			"success",
+			previewDomain,
+		);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${successComment}`,
+		});
+		await updateDeploymentStatus(deployment.deploymentId, "done");
+		await updateComposePreviewDeployment(composePreviewDeploymentId, {
+			previewStatus: "done",
+		});
+	} catch (error) {
+		const comment = getIssueComment(compose.name, "error", previewDomain);
+		await updateIssueComment({
+			...issueParams,
+			body: `### Dokploy Compose Preview Deployment\n\n${comment}`,
+		});
+		await updateDeploymentStatus(deployment.deploymentId, "error");
+		await updateComposePreviewDeployment(composePreviewDeploymentId, {
+			previewStatus: "error",
 		});
 		throw error;
 	}

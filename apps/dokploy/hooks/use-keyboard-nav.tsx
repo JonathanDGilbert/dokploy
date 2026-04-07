@@ -22,6 +22,7 @@ const COMPOSE_SHORTCUTS: Shortcuts = {
 	g: "general",
 	e: "environment",
 	u: "domains",
+	p: "preview-deployments",
 	d: "deployments",
 	b: "backups",
 	s: "schedules",
