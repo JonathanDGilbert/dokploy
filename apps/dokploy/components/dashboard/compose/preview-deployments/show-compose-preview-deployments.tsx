@@ -181,6 +181,7 @@ export const ShowComposePreviewDeployments = ({ composeId }: Props) => {
 														<ShowModalLogs
 															appName={deployment.appName}
 															serverId={data?.serverId || ""}
+															type="standalone"
 														>
 															<Button
 																variant="outline"
