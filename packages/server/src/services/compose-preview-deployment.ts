@@ -9,7 +9,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import type { z } from "zod";
-import { generatePassword } from "../templates";
+import { generatePassword, truncateDnsLabel } from "../templates";
 import { authGithub } from "../utils/providers/github";
 import { createDomain } from "./domain";
 import { findGithubById, type Github, getIssueComment } from "./github";
@@ -134,14 +134,12 @@ const generateWildcardDomain = async (
 			ip = settings?.serverIp || "";
 		}
 
-		const slugIp = ip.replaceAll(".", "-");
-		return baseDomain.replace(
-			"*",
-			`${hash}${slugIp === "" ? "" : `-${slugIp}`}`,
-		);
+		const slugIp = ip.replaceAll(".", "-").replaceAll(":", "-");
+		const fullLabel = `${hash}${slugIp === "" ? "" : `-${slugIp}`}`;
+		return baseDomain.replace("*", truncateDnsLabel(fullLabel));
 	}
 
-	return baseDomain.replace("*", hash);
+	return baseDomain.replace("*", truncateDnsLabel(hash));
 };
 
 export const createComposePreviewDeployment = async (

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -47,6 +47,18 @@ export const generateRandomDomain = ({
 			: projectName;
 
 	return `${truncatedProjectName}-${hash}${slugIp === "" ? "" : `-${slugIp}`}.traefik.me`;
+};
+
+/**
+ * A single DNS label (e.g. the leftmost subdomain) must be ≤63 characters (RFC 1035).
+ * Preview hostnames combine appName + IP slug and can exceed that; invalid labels break
+ * resolution and Traefik Host() routing.
+ */
+export const truncateDnsLabel = (label: string, maxLen = 63): string => {
+	if (label.length <= maxLen) return label;
+	const digest = createHash("sha256").update(label).digest("hex").slice(0, 16);
+	const fallback = `p-${digest}`;
+	return fallback.slice(0, maxLen);
 };
 
 export const generateHash = (length = 8): string => {
