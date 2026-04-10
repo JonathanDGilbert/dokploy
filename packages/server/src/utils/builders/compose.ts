@@ -18,6 +18,8 @@ export type ComposeNested = InferResultType<
 export const getBuildComposeCommand = async (compose: ComposeNested) => {
 	const { COMPOSE_PATH } = paths(!!compose.serverId);
 	const { sourceType, appName, mounts, composeType, domains } = compose;
+	const composeFileRelativePath =
+		sourceType === "raw" ? "docker-compose.yml" : compose.composePath;
 	const command = createCommand(compose);
 	const envCommand = getCreateEnvFileCommand(compose);
 	const projectPath = join(COMPOSE_PATH, compose.appName, "code");
@@ -53,6 +55,8 @@ Compose Type: ${composeType} ✅`;
 
 		cd "${projectPath}";
 
+		${composeType === "docker-compose" ? `docker compose -p ${appName} -f ${composeFileRelativePath} down --remove-orphans || true
+` : ""}
 		${compose.isolatedDeployment ? `docker network inspect ${compose.appName} >/dev/null 2>&1 || docker network create ${compose.composeType === "stack" ? "--driver overlay" : ""} --attachable ${compose.appName}` : ""}
 		env -i PATH="$PATH" ${exportEnvCommand} docker ${command.split(" ").join(" ")} 2>&1 || { echo "Error: ❌ Docker command failed"; exit 1; }
 		${compose.isolatedDeployment ? `docker network connect ${compose.appName} $(docker ps --filter "name=dokploy-traefik" -q) >/dev/null 2>&1` : ""}
@@ -88,7 +92,7 @@ export const createCommand = (compose: ComposeNested) => {
 	let command = "";
 
 	if (composeType === "docker-compose") {
-		command = `compose -p ${appName} -f ${path} up -d --build --remove-orphans`;
+		command = `compose -p ${appName} -f ${path} up -d --build --remove-orphans --force-recreate`;
 	} else if (composeType === "stack") {
 		command = `stack deploy -c ${path} ${appName} --prune --with-registry-auth`;
 	}
