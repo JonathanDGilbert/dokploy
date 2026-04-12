@@ -60,6 +60,13 @@ import { validUniqueServerAppName } from "./project";
 
 export type Compose = typeof compose.$inferSelect;
 
+const filterPrimaryComposeDomains = (domains: Domain[] = []) => {
+	return domains.filter(
+		(domain) =>
+			domain.domainType !== "preview" && !domain.composePreviewDeploymentId,
+	);
+};
+
 export const createCompose = async (
 	input: z.infer<typeof apiCreateCompose>,
 ) => {
@@ -237,6 +244,9 @@ export const deployCompose = async ({
 	descriptionLog: string;
 }) => {
 	const compose = await findComposeById(composeId);
+	const primaryComposeDomains = filterPrimaryComposeDomains(
+		compose.domains as Domain[],
+	);
 
 	const buildLink = `${await getDokployUrl()}/dashboard/project/${
 		compose.environment.projectId
@@ -250,6 +260,7 @@ export const deployCompose = async ({
 	try {
 		const entity = {
 			...compose,
+			domains: primaryComposeDomains,
 			type: "compose" as const,
 		};
 		let command = "set -e;";
@@ -308,7 +319,7 @@ export const deployCompose = async ({
 			applicationType: "compose",
 			buildLink,
 			organizationId: compose.environment.project.organizationId,
-			domains: compose.domains,
+			domains: primaryComposeDomains,
 			environmentName: compose.environment.name,
 		});
 	} catch (error) {
@@ -367,6 +378,13 @@ export const rebuildCompose = async ({
 	descriptionLog: string;
 }) => {
 	const compose = await findComposeById(composeId);
+	const primaryComposeDomains = filterPrimaryComposeDomains(
+		compose.domains as Domain[],
+	);
+	const composeForBuild = {
+		...compose,
+		domains: primaryComposeDomains,
+	} as ComposeNested;
 
 	const deployment = await createDeploymentCompose({
 		composeId: composeId,
@@ -403,7 +421,7 @@ export const rebuildCompose = async ({
 		}
 
 		command = "set -e;";
-		command += await getBuildComposeCommand(compose);
+		command += await getBuildComposeCommand(composeForBuild);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
 		if (compose.serverId) {
 			await execAsyncRemote(compose.serverId, commandWithLog);
