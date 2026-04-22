@@ -8,6 +8,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import type { z } from "zod";
+import { getPreviewDeploymentNamePrefix } from "../constants";
 import { generatePassword, truncateDnsLabel } from "../templates";
 import { removeService } from "../utils/docker/utils";
 import { removeDirectoryCode } from "../utils/filesystem/directory";
@@ -98,7 +99,6 @@ export const removePreviewDeployment = async (previewDeploymentId: string) => {
 		});
 	}
 };
-// testing-tesoitnmg-ddq0ul-preview-ihl44o
 export const updatePreviewDeployment = async (
 	previewDeploymentId: string,
 	previewDeploymentData: Partial<PreviewDeployment>,
@@ -134,7 +134,7 @@ export const createPreviewDeployment = async (
 	schema: z.infer<typeof apiCreatePreviewDeployment>,
 ) => {
 	const application = await findApplicationById(schema.applicationId);
-	const appName = `preview-${application.appName}-${generatePassword(6)}`;
+	const appName = `${getPreviewDeploymentNamePrefix()}-${application.appName}-${generatePassword(6)}`;
 
 	const org = await db.query.organization.findFirst({
 		where: eq(organization.id, application.environment.project.organizationId),

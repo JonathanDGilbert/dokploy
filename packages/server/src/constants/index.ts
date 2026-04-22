@@ -88,6 +88,56 @@ export const docker = getDockerConfig();
 export const BETTER_AUTH_SECRET =
 	process.env.BETTER_AUTH_SECRET || "better-auth-secret-123456789";
 
+/** Allowed chars for the first segment of preview deployment stack names: `{prefix}-{appName}-{rand}`. */
+const PREVIEW_DEPLOYMENT_PREFIX_PATTERN = /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/i;
+
+/**
+ * Prefix for preview deployment Docker / Traefik names (`{prefix}-{appName}-{random}`).
+ * Override with `DOKPLOY_PREVIEW_DEPLOYMENT_PREFIX` (e.g. `pr`). Defaults to `preview` for compatibility.
+ */
+export const getPreviewDeploymentNamePrefix = (): string => {
+	const raw = process.env.DOKPLOY_PREVIEW_DEPLOYMENT_PREFIX?.trim();
+	const value =
+		raw === undefined || raw === "" ? "preview" : raw.toLowerCase();
+	if (
+		value.length < 1 ||
+		value.length > 32 ||
+		!PREVIEW_DEPLOYMENT_PREFIX_PATTERN.test(value)
+	) {
+		throw new Error(
+			"DOKPLOY_PREVIEW_DEPLOYMENT_PREFIX must be 1–32 characters: letters, numbers, underscores and hyphens (no leading/trailing hyphen).",
+		);
+	}
+	return value;
+};
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Preview stack names are `{prefix}-{application.appName}-{random}`. For Traefik auth middleware
+ * names, Dokploy maps to `auth-{application.appName}`. Supports the configured prefix and legacy `preview`.
+ */
+export const getPreviewDeploymentAuthMiddlewareBaseName = (
+	previewAppName: string,
+): string => {
+	const prefixes = [
+		getPreviewDeploymentNamePrefix(),
+		"preview",
+	];
+	const seen = new Set<string>();
+	for (const p of prefixes) {
+		if (seen.has(p)) continue;
+		seen.add(p);
+		const m = previewAppName.match(
+			new RegExp(`^${escapeRegExp(p)}-(.+)-[^-]+$`),
+		);
+		if (m?.[1]) {
+			return m[1];
+		}
+	}
+	return previewAppName;
+};
+
 export const paths = (isServer = false) => {
 	const BASE_PATH =
 		isServer || process.env.NODE_ENV === "production"

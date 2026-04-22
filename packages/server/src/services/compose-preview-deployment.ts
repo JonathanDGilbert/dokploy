@@ -9,6 +9,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import type { z } from "zod";
+import { getPreviewDeploymentNamePrefix } from "../constants";
 import { generatePassword, truncateDnsLabel } from "../templates";
 import { authGithub } from "../utils/providers/github";
 import { createDomain } from "./domain";
@@ -146,7 +147,7 @@ export const createComposePreviewDeployment = async (
 	schema: z.infer<typeof apiCreateComposePreviewDeployment>,
 ) => {
 	const compose = await findComposeForPreview(schema.composeId);
-	const appName = `preview-${compose.appName}-${generatePassword(6)}`;
+	const appName = `${getPreviewDeploymentNamePrefix()}-${compose.appName}-${generatePassword(6)}`;
 
 	const org = await db.query.organization.findFirst({
 		where: eq(organization.id, compose.environment.project.organizationId),

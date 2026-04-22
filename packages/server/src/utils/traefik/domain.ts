@@ -1,3 +1,4 @@
+import { getPreviewDeploymentAuthMiddlewareBaseName } from "@dokploy/server/constants";
 import type { Domain } from "@dokploy/server/services/domain";
 import type { ApplicationNested } from "../builders";
 import {
@@ -174,10 +175,7 @@ export const createRouterConfig = async (
 		if (security.length > 0) {
 			let middlewareName = `auth-${appName}`;
 			if (domain.domainType === "preview") {
-				middlewareName = `auth-${appName.replace(
-					/^preview-(.+)-[^-]+$/,
-					"$1",
-				)}`;
+				middlewareName = `auth-${getPreviewDeploymentAuthMiddlewareBaseName(appName)}`;
 			}
 			routerConfig.middlewares?.push(middlewareName);
 		}
